@@ -43,6 +43,7 @@ class InvalidHeader(Exception):
     pass
 
 #Calvin: Accepts a dictionary of header values and appends all the values to a hexadecimal string representing the block header
+ #Calvin: The bits value is the difficulty of the block
 def serialize_header(header_dict: dict) -> str:
     s = int_to_hex(header_dict['version'], 4) \
         + rev_hex(header_dict['prev_block_hash']) \
@@ -133,7 +134,7 @@ def read_blockchains(config: 'SimpleConfig'):
         prev_hash = (64-len(prev_hash)) * "0" + prev_hash  # left-pad with zeroes
         first_hash = (64-len(first_hash)) * "0" + first_hash
         # forks below the max checkpoint are not allowed
-        # TODO-Calvin: Is this outline in the bitcoin core?
+        # Calvin: Checkpoints are when the network agree on the best chain, therefore forks should not exist before the latest checkpoint
         if forkpoint <= constants.net.max_checkpoint():
             delete_chain(filename, "deleting fork below max checkpoint")
             return
@@ -169,6 +170,7 @@ def read_blockchains(config: 'SimpleConfig'):
 def get_best_chain() -> 'Blockchain':
     return blockchains[constants.net.GENESIS]
 
+# Calvin: what is the chainwork cache used for? It is the total number of hashes that are expected to have been necessary to produce the current chain, in hexadecimal.
 # block hash -> chain work; up to and including that block
 _CHAINWORK_CACHE = {
     "0000000000000000000000000000000000000000000000000000000000000000": 0,  # virtual block at height -1
@@ -182,6 +184,7 @@ class Blockchain(util.PrintError):
     Calvin Notes:
 
     - Forkpoint seems to the beginning of the block
+    - Height is treated as an index
     """
 
     def __init__(self, config: SimpleConfig, forkpoint: int, parent: Optional['Blockchain'],
@@ -205,7 +208,7 @@ class Blockchain(util.PrintError):
                 return func(self, *args, **kwargs)
         return func_wrapper
 
-    # Calvin: Checkpoints are defined in a json file called checkpoints.json? Todo: what exactly are they used for?
+    # Calvin: Checkpoints are defined in a json file called checkpoints.json? Todo: Where does it get an updated version?
     @property
     def checkpoints(self):
         return constants.net.CHECKPOINTS
@@ -277,7 +280,7 @@ class Blockchain(util.PrintError):
         except Exception:
             return False
 
-    # Calvin:
+    # Calvin: Adds a fork to the blockchain
     def fork(parent, header: dict) -> 'Blockchain':
         if not parent.can_connect(header, check_height=False):
             raise Exception("forking header does not connect to parent chain")
@@ -287,7 +290,7 @@ class Blockchain(util.PrintError):
                           parent=parent,
                           forkpoint_hash=hash_header(header),
                           prev_hash=parent.get_hash(forkpoint-1))
-        open(self.path(), 'w+').close()
+        open(self.path(), 'w+').close() # Calvin: Creating the block file
         self.save_header(header)
         # put into global dict. note that in some cases
         # save_header might have already put it there but that's OK
@@ -296,19 +299,24 @@ class Blockchain(util.PrintError):
             blockchains[chain_id] = self
         return self
 
+    # Calvin: Returns the height of the current block
     @with_lock
     def height(self) -> int:
         return self.forkpoint + self.size() - 1
 
+    # Calvin: Returns the size of the current block
     @with_lock
     def size(self) -> int:
         return self._size
 
+    # Calvin: This will get the current size of the blockchain by dividing the file size by the HEADER_SIZE
     @with_lock
     def update_size(self) -> None:
         p = self.path()
         self._size = os.path.getsize(p)//HEADER_SIZE if os.path.exists(p) else 0
 
+    # Calvin: This verifies the value of the header provided against the expected header
+    # Calvin: What is the target?
     @classmethod
     def verify_header(cls, header: dict, prev_hash: str, target: int, expected_header_hash: str=None) -> None:
         _hash = hash_header(header)
@@ -325,22 +333,29 @@ class Blockchain(util.PrintError):
         if block_hash_as_num > target:
             raise Exception(f"insufficient proof of work: {block_hash_as_num} vs target {target}")
 
+    # Todo-Calvin: Chuck = Chuck of data?
+    # Calvin: Verify that all of the data in this block have valid header values
     def verify_chunk(self, index: int, data: bytes) -> None:
+        # Todo-Calvin: What does this num represent? what is data?
         num = len(data) // HEADER_SIZE
         start_height = index * 2016
         prev_hash = self.get_hash(start_height - 1)
+        # Calvin: Get the target of the previous block
         target = self.get_target(index-1)
+        # Calvin: Verify that all of the data in this block meet the target difficulty
         for i in range(num):
             height = start_height + i
             try:
                 expected_header_hash = self.get_hash(height)
             except MissingHeader:
                 expected_header_hash = None
+            # Calvin: I think this gets a subset of the bytes (gets 80 bytes)
             raw_header = data[i*HEADER_SIZE : (i+1)*HEADER_SIZE]
             header = deserialize_header(raw_header, index*2016 + i)
             self.verify_header(header, prev_hash, target, expected_header_hash)
             prev_hash = hash_header(header)
 
+    # Calvin: This defines the path for the file to be saved
     @with_lock
     def path(self):
         d = util.get_headers_dir(self.config)
@@ -354,9 +369,11 @@ class Blockchain(util.PrintError):
             filename = os.path.join('forks', basename)
         return os.path.join(d, filename)
 
+    # Calvin:
     @with_lock
     def save_chunk(self, index: int, chunk: bytes):
         assert index >= 0, index
+        # Todo-Calvin: When would the chunk have to be within the checkpoints length?
         chunk_within_checkpoint_region = index < len(self.checkpoints)
         # chunks in checkpoint region are the responsibility of the 'main chain'
         if chunk_within_checkpoint_region and self.parent is not None:
@@ -364,6 +381,7 @@ class Blockchain(util.PrintError):
             main_chain.save_chunk(index, chunk)
             return
 
+        # Todo-Calvin: Wtf?
         delta_height = (index * 2016 - self.forkpoint)
         delta_bytes = delta_height * HEADER_SIZE
         # if this chunk contains our forkpoint, only save the part after forkpoint
@@ -375,6 +393,7 @@ class Blockchain(util.PrintError):
         self.write(chunk, delta_bytes, truncate)
         self.swap_with_parent()
 
+    # Todo-Calvin: When does it need to do this?
     def swap_with_parent(self) -> None:
         with self.lock, blockchains_lock:
             # do the swap; possibly multiple ones
@@ -392,6 +411,7 @@ class Blockchain(util.PrintError):
                     if self.check_hash(old_sibling.forkpoint - 1, old_sibling._prev_hash):
                         old_sibling.parent = self
 
+    # Todo-Calvin: This is special forking logic that we will need to understand
     def _swap_with_parent(self) -> bool:
         """Check if this chain became stronger than its parent, and swap
         the underlying files if so. The Blockchain instances will keep
@@ -401,7 +421,7 @@ class Blockchain(util.PrintError):
             return False
         if self.parent.get_chainwork() >= self.get_chainwork():
             return False
-        self.print_error("swap", self.forkpoint, self.parent.forkpoint)
+        self.print_error("swap", self.forkpoint, self.parent.forkpoint) #Calvin: We should see in the logs when a swap happens
         parent_branch_size = self.parent.height() - self.forkpoint + 1
         forkpoint = self.forkpoint  # type: Optional[int]
         parent = self.parent  # type: Optional[Blockchain]
@@ -438,9 +458,11 @@ class Blockchain(util.PrintError):
         blockchains[parent.get_id()] = parent
         return True
 
+    # Calvin: Uses the forkpoint_has as the id of this chunk, used for the blockchain cache
     def get_id(self) -> str:
         return self._forkpoint_hash
 
+    # Calvin: Checks that the headers directory exists
     def assert_headers_file_available(self, path):
         if os.path.exists(path):
             return
@@ -449,6 +471,7 @@ class Blockchain(util.PrintError):
         else:
             raise FileNotFoundError('Cannot find headers file but headers_dir is there. Should be at {}'.format(path))
 
+    # Calvin: Writes the given bytes at the offset provided into the header file of this block
     @with_lock
     def write(self, data: bytes, offset: int, truncate: bool=True) -> None:
         filename = self.path()
@@ -463,14 +486,15 @@ class Blockchain(util.PrintError):
             os.fsync(f.fileno())
         self.update_size()
 
+    # Calvin: Saves the header dictionary as bytes into the header file.
     @with_lock
     def save_header(self, header: dict) -> None:
-        delta = header.get('block_height') - self.forkpoint
+        delta = header.get('block_height') - self.forkpoint # Todo-Calvin: Is the forkpoint treated as the beginning of every block?
         data = bfh(serialize_header(header))
         # headers are only _appended_ to the end:
         assert delta == self.size(), (delta, self.size())
         assert len(data) == HEADER_SIZE
-        self.write(data, delta*HEADER_SIZE)
+        self.write(data, delta*HEADER_SIZE) # Calvin: Writes the header into the blockchain
         self.swap_with_parent()
 
     # Calvin: Reads the header from file and returns the dictionary value
@@ -523,6 +547,8 @@ class Blockchain(util.PrintError):
             return hash_header(header)
 
 
+    # Calvin: Gets the target of the header at the given index
+    # Calvin: Bits represents the target difficulty of this block
     def get_target(self, index: int) -> int:
         # compute target from chunk x, used in chunk x+1
         if constants.net.TESTNET:
@@ -541,13 +567,16 @@ class Blockchain(util.PrintError):
         target = self.bits_to_target(bits)
         nActualTimespan = last.get('timestamp') - first.get('timestamp')
         nTargetTimespan = 14 * 24 * 60 * 60
+        # Todo-Calvin: What is the significance of 4?
         nActualTimespan = max(nActualTimespan, nTargetTimespan // 4)
         nActualTimespan = min(nActualTimespan, nTargetTimespan * 4)
+        # Todo-Calvin: So the target time will decrease over time?
         new_target = min(MAX_TARGET, (target * nActualTimespan) // nTargetTimespan)
         # not any target can be represented in 32 bits:
         new_target = self.bits_to_target(self.target_to_bits(new_target))
         return new_target
 
+    # Calvin: Converts the bits (from the header) to the target difficulty.
     @classmethod
     def bits_to_target(cls, bits: int) -> int:
         bitsN = (bits >> 24) & 0xff
@@ -558,6 +587,7 @@ class Blockchain(util.PrintError):
             raise Exception("Second part of bits should be in [0x8000, 0x7fffff]")
         return bitsBase << (8 * (bitsN-3))
 
+    # Calvin: Converts the target difficulty to bits.
     @classmethod
     def target_to_bits(cls, target: int) -> int:
         c = ("%064x" % target)[2:]
@@ -569,13 +599,17 @@ class Blockchain(util.PrintError):
             bitsBase >>= 8
         return bitsN << 24 | bitsBase
 
+    # Todo-Calvin: Why is this calculating instead of using the chainworks_cache?
     def chainwork_of_header_at_height(self, height: int) -> int:
         """work done by single header at given height"""
         chunk_idx = height // 2016 - 1
         target = self.get_target(chunk_idx)
+        # Todo-Calvin: What are these values from?
         work = ((2 ** 256 - target - 1) // (target + 1)) + 1
         return work
 
+    # Todo-Calvin: Why does it need to store the chainwork in a cache? Don't we just need the highest? Must have something to do with the forks
+    # Todo-Calvin: Most likely standard blockchain logic for handling forks
     @with_lock
     def get_chainwork(self, height=None) -> int:
         if height is None:
@@ -584,12 +618,14 @@ class Blockchain(util.PrintError):
             # On testnet/regtest, difficulty works somewhat different.
             # It's out of scope to properly implement that.
             return height
+        # Calvin: // means floor division
+        # Calvin: last_retarget is the Integer value of the height of this block
         last_retarget = height // 2016 * 2016 - 1
         cached_height = last_retarget
         while _CHAINWORK_CACHE.get(self.get_hash(cached_height)) is None:
-            if cached_height <= -1:
+            if cached_height <= -1: # Calvin: if height of the current block is 0 (is empty)
                 break
-            cached_height -= 2016
+            cached_height -= 2016 # Todo-Calvin: Why subtract 2016?
         assert cached_height >= -1, cached_height
         running_total = _CHAINWORK_CACHE[self.get_hash(cached_height)]
         while cached_height < last_retarget:
@@ -612,7 +648,7 @@ class Blockchain(util.PrintError):
             #self.print_error("cannot connect at height", height)
             return False
         if height == 0:
-            return hash_header(header) == constants.net.GENESIS # Todo-Calvin: What is the GENESIS value?
+            return hash_header(header) == constants.net.GENESIS
         try:
             prev_hash = self.get_hash(height - 1)
         except:
@@ -652,6 +688,7 @@ class Blockchain(util.PrintError):
         return cp
 
 
+#Calvin: Verifies that the list of blockchain headers are all valid
 def check_header(header: dict) -> Optional[Blockchain]:
     if type(header) is not dict:
         return None
@@ -661,7 +698,7 @@ def check_header(header: dict) -> Optional[Blockchain]:
             return b
     return None
 
-
+#Calvin: Verifies that the list of blockchain can all be connected with each other
 def can_connect(header: dict) -> Optional[Blockchain]:
     with blockchains_lock: chains = list(blockchains.values())
     for b in chains:
