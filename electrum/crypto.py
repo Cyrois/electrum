@@ -185,12 +185,12 @@ def pw_decode(data: str, password: Union[bytes, str, None], *, version: int) -> 
         raise InvalidPassword() from e
     return d
 
-
+#Calvin: Accepts either bytes or a string and returns the SHA256 hash value
 def sha256(x: Union[bytes, str]) -> bytes:
     x = to_bytes(x, 'utf8')
     return bytes(hashlib.sha256(x).digest())
 
-
+#Calvin: Accepts either bytes or a string and returns the double SHA256 hash value
 def sha256d(x: Union[bytes, str]) -> bytes:
     x = to_bytes(x, 'utf8')
     out = bytes(sha256(sha256(x)))

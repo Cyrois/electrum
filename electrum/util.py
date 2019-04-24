@@ -477,10 +477,10 @@ def to_bytes(something, encoding='utf8') -> bytes:
     else:
         raise TypeError("Not a string or bytes like object")
 
-
+#Calvin: Create a bytes object from a string of hexadecimal numbers.
 bfh = bytes.fromhex
 
-
+#Calvin: Create a string of hexadecimal numbers from a bytes object. Bytes is a builtin Python object.
 def bh2u(x: bytes) -> str:
     """
     str with hex representation of a bytes-like object

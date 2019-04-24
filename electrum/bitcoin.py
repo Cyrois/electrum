@@ -190,10 +190,10 @@ class opcodes(IntEnum):
     def hex(self) -> str:
         return bytes([self]).hex()
 
-
+#Calvin: Reverse Hexadecimal
+#Calvin: Converts hex string to bytes, reverses the order, then converts bytes back to hex
 def rev_hex(s: str) -> str:
     return bh2u(bfh(s)[::-1])
-
 
 def int_to_hex(i: int, length: int=1) -> str:
     """Converts int to little-endian hex string.
@@ -302,6 +302,7 @@ def dust_threshold(network: 'Network'=None) -> int:
     return 182 * 3 * relayfee(network) // 1000
 
 
+#Calvin: Accepts bytes, reverses the order and returns the hex value
 def hash_encode(x: bytes) -> str:
     return bh2u(x[::-1])
 

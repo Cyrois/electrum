@@ -42,6 +42,7 @@ class MissingHeader(Exception):
 class InvalidHeader(Exception):
     pass
 
+#Calvin: Accepts a dictionary of header values and appends all the values to a hexadecimal string representing the block header
 def serialize_header(header_dict: dict) -> str:
     s = int_to_hex(header_dict['version'], 4) \
         + rev_hex(header_dict['prev_block_hash']) \
@@ -51,9 +52,12 @@ def serialize_header(header_dict: dict) -> str:
         + int_to_hex(int(header_dict['nonce']), 4)
     return s
 
+#Calvin: Accepts a (presumably hexadecimal) string representing the block header and converts it to a dictionary
 def deserialize_header(s: bytes, height: int) -> dict:
+    # Calvin: If s is null
     if not s:
         raise InvalidHeader('Invalid header: {}'.format(s))
+    # Calvin: Validates that the header is 80 bytes
     if len(s) != HEADER_SIZE:
         raise InvalidHeader('Invalid header length: {}'.format(len(s)))
     hex_to_int = lambda s: int.from_bytes(s, byteorder='little')
@@ -67,14 +71,16 @@ def deserialize_header(s: bytes, height: int) -> dict:
     h['block_height'] = height
     return h
 
+
 def hash_header(header: dict) -> str:
+    # Calvin: Should only hit these two cases if receiving very first block
     if header is None:
-        return '0' * 64
+        return '0' * 64 #TODO-Calvin: why would it return 64 0's?
     if header.get('prev_block_hash') is None:
-        header['prev_block_hash'] = '00'*32
+        header['prev_block_hash'] = '00'*32 #TODO-Calvin: why would it return 64 0's?
     return hash_raw_header(serialize_header(header))
 
-
+#Calvin: Converts Header String (Presumably Hex) to bytes, then double hashes, reverses the order and returns the hex value (hash_encode)
 def hash_raw_header(header: str) -> str:
     return hash_encode(sha256d(bfh(header)))
 
@@ -85,6 +91,7 @@ blockchains = {}  # type: Dict[str, Blockchain]
 blockchains_lock = threading.RLock()
 
 
+# Calvin: This is executed when the wallet first connects to the network, effectively builds the current blockchain locally
 def read_blockchains(config: 'SimpleConfig'):
     best_chain = Blockchain(config=config,
                             forkpoint=0,
@@ -93,6 +100,8 @@ def read_blockchains(config: 'SimpleConfig'):
                             prev_hash=None)
     blockchains[constants.net.GENESIS] = best_chain
     # consistency checks
+    #TODO-Calvin: This seems to be the point where it checks the 2016th block timestamp.
+    # Calvin: Seems like this is validation that we would need
     if best_chain.height() > constants.net.max_checkpoint():
         header_after_cp = best_chain.read_header(constants.net.max_checkpoint()+1)
         if not header_after_cp or not best_chain.can_connect(header_after_cp, check_height=False):
@@ -100,28 +109,37 @@ def read_blockchains(config: 'SimpleConfig'):
             os.unlink(best_chain.path())
             best_chain.update_size()
     # forks
+    # Calvin: makes a folder called 'forks' wherever config.path is defined
     fdir = os.path.join(util.get_headers_dir(config), 'forks')
     util.make_dir(fdir)
     # files are named as: fork2_{forkpoint}_{prev_hash}_{first_hash}
+    # Calvin: returns the list of files that follows the format above and no '.' and sorts the list
     l = filter(lambda x: x.startswith('fork2_') and '.' not in x, os.listdir(fdir))
     l = sorted(l, key=lambda x: int(x.split('_')[1]))  # sort by forkpoint
 
+
+    # Calvin: unlink will delete the file
     def delete_chain(filename, reason):
         util.print_error(f"[blockchain] deleting chain {filename}: {reason}")
         os.unlink(os.path.join(fdir, filename))
 
+
+    # Calvin: Performs header validation and then appends the block to the blockchain if validation passes
     def instantiate_chain(filename):
+        # files are named as: fork2_{forkpoint}_{prev_hash}_{first_hash}
         __, forkpoint, prev_hash, first_hash = filename.split('_')
         forkpoint = int(forkpoint)
+        # Calvin: The hash value used is 64 characters
         prev_hash = (64-len(prev_hash)) * "0" + prev_hash  # left-pad with zeroes
         first_hash = (64-len(first_hash)) * "0" + first_hash
         # forks below the max checkpoint are not allowed
+        # TODO-Calvin: Is this outline in the bitcoin core?
         if forkpoint <= constants.net.max_checkpoint():
             delete_chain(filename, "deleting fork below max checkpoint")
             return
-        # find parent (sorting by forkpoint guarantees it's already instantiated)
+        # find parent (sorting by forkpoint guarantees it's already instantiated TODO-Calvin: why?)
         for parent in blockchains.values():
-            if parent.check_hash(forkpoint - 1, prev_hash):
+            if parent.check_hash(forkpoint - 1, prev_hash):  # Calvin: Seems like the forkpoint is always the beginning of a new block
                 break
         else:
             delete_chain(filename, "cannot find parent for chain")
@@ -132,14 +150,15 @@ def read_blockchains(config: 'SimpleConfig'):
                        forkpoint_hash=first_hash,
                        prev_hash=prev_hash)
         # consistency checks
-        h = b.read_header(b.forkpoint)
-        if first_hash != hash_header(h):
+        h = b.read_header(b.forkpoint) # Calvin: gets the dictionary value of the header at the forkpoint
+        if first_hash != hash_header(h):  # Calvin: Checks that the forkpoint header is the beginning of the block
             delete_chain(filename, "incorrect first hash for chain")
             return
         if not b.parent.can_connect(h, check_height=False):
             delete_chain(filename, "cannot connect chain to parent")
             return
         chain_id = b.get_id()
+        # assert <condition>,<error message>
         assert first_hash == chain_id, (first_hash, chain_id)
         blockchains[chain_id] = b
 
@@ -159,12 +178,16 @@ _CHAINWORK_CACHE = {
 class Blockchain(util.PrintError):
     """
     Manages blockchain headers and their verification
+
+    Calvin Notes:
+
+    - Forkpoint seems to the beginning of the block
     """
 
     def __init__(self, config: SimpleConfig, forkpoint: int, parent: Optional['Blockchain'],
                  forkpoint_hash: str, prev_hash: Optional[str]):
-        assert isinstance(forkpoint_hash, str) and len(forkpoint_hash) == 64, forkpoint_hash
-        assert (prev_hash is None) or (isinstance(prev_hash, str) and len(prev_hash) == 64), prev_hash
+        assert isinstance(forkpoint_hash, str) and len(forkpoint_hash) == 64, forkpoint_hash # Calvin: forkpoint_hash validation
+        assert (prev_hash is None) or (isinstance(prev_hash, str) and len(prev_hash) == 64), prev_hash # Calvin: prev_hash validation
         # assert (parent is None) == (forkpoint == 0)
         if 0 < forkpoint <= constants.net.max_checkpoint():
             raise Exception(f"cannot fork below max checkpoint. forkpoint: {forkpoint}")
@@ -182,14 +205,17 @@ class Blockchain(util.PrintError):
                 return func(self, *args, **kwargs)
         return func_wrapper
 
+    # Calvin: Checkpoints are defined in a json file called checkpoints.json? Todo: what exactly are they used for?
     @property
     def checkpoints(self):
         return constants.net.CHECKPOINTS
 
+    # Calvin: Get the max forkpoint (header) of all the children, return the max or None
     def get_max_child(self) -> Optional[int]:
         children = self.get_direct_children()
         return max([x.forkpoint for x in children]) if children else None
 
+    # Calvin: Return the max child forkpoint if not null or else return the current chain's forkpoint
     def get_max_forkpoint(self) -> int:
         """Returns the max height where there is a fork
         related to this chain.
@@ -197,10 +223,12 @@ class Blockchain(util.PrintError):
         mc = self.get_max_child()
         return mc if mc is not None else self.forkpoint
 
+    # Calvin: gets a list of all immediate children of the current chain
     def get_direct_children(self) -> Sequence['Blockchain']:
         with blockchains_lock:
             return list(filter(lambda y: y.parent==self, blockchains.values()))
 
+    # Calvin: Returns a map of all the blocks and their height
     def get_parent_heights(self) -> Mapping['Blockchain', int]:
         """Returns map: (parent chain -> height of last common block)"""
         with blockchains_lock:
@@ -213,6 +241,7 @@ class Blockchain(util.PrintError):
                 chain = parent
             return result
 
+    # Calvin: Merges two height maps by taking their minimum values for each key and finds the maximum height value in the union of the maps
     def get_height_of_last_common_block_with_chain(self, other_chain: 'Blockchain') -> int:
         last_common_block_height = 0
         our_parents = self.get_parent_heights()
@@ -223,13 +252,16 @@ class Blockchain(util.PrintError):
                 last_common_block_height = max(last_common_block_height, h)
         return last_common_block_height
 
+    # Calvin: get the current height compared to the max forkpoint
     @with_lock
     def get_branch_size(self) -> int:
         return self.height() - self.get_max_forkpoint() + 1
 
+    # Calvin: Get forkpoint header, hash it, strip leading 0s, return substring
     def get_name(self) -> str:
         return self.get_hash(self.get_max_forkpoint()).lstrip('0')[0:10]
 
+    # Calvin: Verifies that the header hash matches the hash of the block
     def check_header(self, header: dict) -> bool:
         header_hash = hash_header(header)
         height = header.get('block_height')
@@ -245,6 +277,7 @@ class Blockchain(util.PrintError):
         except Exception:
             return False
 
+    # Calvin:
     def fork(parent, header: dict) -> 'Blockchain':
         if not parent.can_connect(header, check_height=False):
             raise Exception("forking header does not connect to parent chain")
@@ -440,39 +473,43 @@ class Blockchain(util.PrintError):
         self.write(data, delta*HEADER_SIZE)
         self.swap_with_parent()
 
+    # Calvin: Reads the header from file and returns the dictionary value
     @with_lock
     def read_header(self, height: int) -> Optional[dict]:
         if height < 0:
             return
-        if height < self.forkpoint:
+        if height < self.forkpoint: #TODO-Calvin: what is the forkpoint? Is it when the blockchain has forked? Why would it read the parent?
             return self.parent.read_header(height)
         if height > self.height():
             return
         delta = height - self.forkpoint
         name = self.path()
         self.assert_headers_file_available(name)
+        # Calvin: opens the current block's header file in read bytes mode
         with open(name, 'rb') as f:
-            f.seek(delta * HEADER_SIZE)
-            h = f.read(HEADER_SIZE)
-            if len(h) < HEADER_SIZE:
+            f.seek(delta * HEADER_SIZE) # Calvin: find the forkpoint's header
+            h = f.read(HEADER_SIZE) # Calvin: read the forkpoint's header
+            if len(h) < HEADER_SIZE: # Calvin: Validate that the forkpoint is the correct length (when would this be false, eof?)
                 raise Exception('Expected to read a full header. This was only {} bytes'.format(len(h)))
-        if h == bytes([0])*HEADER_SIZE:
+        if h == bytes([0])*HEADER_SIZE: # Calvin: If header is all 0's?
             return None
-        return deserialize_header(h, height)
+        return deserialize_header(h, height) # Calvin: Convert the header to a dictionary
 
     def header_at_tip(self) -> Optional[dict]:
         """Return latest header."""
         height = self.height()
         return self.read_header(height)
 
+    # Calvin: Returns the hash of the header at the given block index.
     def get_hash(self, height: int) -> str:
+        # Calvin: Current max block size is 2016. Height is synonymous with block size.
         def is_height_checkpoint():
             within_cp_range = height <= constants.net.max_checkpoint()
             at_chunk_boundary = (height+1) % 2016 == 0
             return within_cp_range and at_chunk_boundary
 
         if height == -1:
-            return '0000000000000000000000000000000000000000000000000000000000000000'
+            return '0000000000000000000000000000000000000000000000000000000000000000' # Todo-Calvin: Why return all 0's?
         elif height == 0:
             return constants.net.GENESIS
         elif is_height_checkpoint():
@@ -484,6 +521,7 @@ class Blockchain(util.PrintError):
             if header is None:
                 raise MissingHeader(height)
             return hash_header(header)
+
 
     def get_target(self, index: int) -> int:
         # compute target from chunk x, used in chunk x+1
@@ -565,15 +603,16 @@ class Blockchain(util.PrintError):
         work_in_last_partial_chunk = (height % 2016 + 1) * work_in_single_header
         return running_total + work_in_last_partial_chunk
 
+    # Calvin: Validation logic when connecting a new block to the chain
     def can_connect(self, header: dict, check_height: bool=True) -> bool:
         if header is None:
             return False
         height = header['block_height']
-        if check_height and self.height() != height - 1:
+        if check_height and self.height() != height - 1: # Todo-Calvin: If the current blocks' height is not next in the chain?
             #self.print_error("cannot connect at height", height)
             return False
         if height == 0:
-            return hash_header(header) == constants.net.GENESIS
+            return hash_header(header) == constants.net.GENESIS # Todo-Calvin: What is the GENESIS value?
         try:
             prev_hash = self.get_hash(height - 1)
         except:

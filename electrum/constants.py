@@ -41,6 +41,14 @@ def read_json(filename, default):
 
 class AbstractNet:
 
+    """
+    Calvin:
+
+    Every 2,016 blocks, the network uses timestamps stored in each block header to calculate the number of seconds
+    elapsed between generation of the first and last of those last 2,016 blocks. The ideal value is 1,209,600 seconds (two weeks).
+
+    TODO: what is the class object that it accepts?
+    """
     @classmethod
     def max_checkpoint(cls) -> int:
         return max(0, len(cls.CHECKPOINTS) * 2016 - 1)
@@ -53,7 +61,7 @@ class BitcoinMainnet(AbstractNet):
     ADDRTYPE_P2PKH = 0
     ADDRTYPE_P2SH = 5
     SEGWIT_HRP = "bc"
-    GENESIS = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    GENESIS = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" #Calvin: Very first block in the chain
     DEFAULT_PORTS = {'t': '50001', 's': '50002'}
     DEFAULT_SERVERS = read_json('servers.json', {})
     CHECKPOINTS = read_json('checkpoints.json', [])
