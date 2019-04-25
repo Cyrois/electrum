@@ -75,6 +75,8 @@ def deserialize_header(s: bytes, height: int) -> dict:
 
 def hash_header(header: dict) -> str:
     # Calvin: Should only hit these two cases if receiving very first block
+    # Aviv: Header is a dictionary with keys ('version','merkle_root', 'height', etc.) and values
+    #       It represents the latest valid header that you have.
     if header is None:
         return '0' * 64 #TODO-Calvin: why would it return 64 0's?
     if header.get('prev_block_hash') is None:
