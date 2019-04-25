@@ -63,13 +63,13 @@ def deserialize_header(s: bytes, height: int) -> dict:
         raise InvalidHeader('Invalid header length: {}'.format(len(s)))
     hex_to_int = lambda s: int.from_bytes(s, byteorder='little')
     h = {}
-    h['version'] = hex_to_int(s[0:4])
-    h['prev_block_hash'] = hash_encode(s[4:36])
-    h['merkle_root'] = hash_encode(s[36:68])
-    h['timestamp'] = hex_to_int(s[68:72])
-    h['bits'] = hex_to_int(s[72:76])
-    h['nonce'] = hex_to_int(s[76:80])
-    h['block_height'] = height
+    h['version'] = hex_to_int(s[0:4])                       # Version allows miners to signal which soft-fork rules they support
+    h['prev_block_hash'] = hash_encode(s[4:36])             # MUST be the Hash(last_header)
+    h['merkle_root'] = hash_encode(s[36:68])                # A commitment to all Transactions inside of this block
+    h['timestamp'] = hex_to_int(s[68:72])                   # A UNIX timestamp
+    h['bits'] = hex_to_int(s[72:76])                        # The current difficulty for mining --> Target Hash
+    h['nonce'] = hex_to_int(s[76:80])                       # Number with no meaning, for miners to change the hash
+    h['block_height'] = height                              # NOT PART OF THE HEADER
     return h
 
 
