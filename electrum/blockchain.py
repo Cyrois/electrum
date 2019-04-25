@@ -44,6 +44,8 @@ class InvalidHeader(Exception):
 
 #Calvin: Accepts a dictionary of header values and appends all the values to a hexadecimal string representing the block header
  #Calvin: The bits value is the difficulty of the block
+    #Aviv: Headers are propogated in a serialized format (80 bytes) and found in the block in a serialized format
+    #Aviv: SO this
 def serialize_header(header_dict: dict) -> str:
     s = int_to_hex(header_dict['version'], 4) \
         + rev_hex(header_dict['prev_block_hash']) \
