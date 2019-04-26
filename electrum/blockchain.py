@@ -107,6 +107,8 @@ def read_blockchains(config: 'SimpleConfig'):
     # consistency checks
     #TODO-Calvin: This seems to be the point where it checks the 2016th block timestamp.
     # Calvin: Seems like this is validation that we would need
+    # Aviv: It looks like the checkpoint is 1 before the new epoch (2016*) and checks if the next block is valid,
+    #       If it is not valid, then it deletes that checkpoint. 
     if best_chain.height() > constants.net.max_checkpoint():
         header_after_cp = best_chain.read_header(constants.net.max_checkpoint()+1)
         if not header_after_cp or not best_chain.can_connect(header_after_cp, check_height=False):
@@ -176,6 +178,10 @@ def get_best_chain() -> 'Blockchain':
 
 # Calvin: what is the chainwork cache used for? It is the total number of hashes that are expected to have been necessary to produce the current chain, in hexadecimal.
 # block hash -> chain work; up to and including that block
+# Aviv: The lowest difficulty for the chain is 1, which has a chainwork of 0100010001 in hex. Every additional block at that difficulty adds
+#       That ammount to the chainwork. So chainwork of a block is trivial Chainwork = difficulty * 0100010001
+#       The reason why chainwork is important is that the real way to find the best blockchain is to find the chain that has the most
+#       Cumulative proof-of-work (which is the chainwork_cache) and not the longest chain.
 _CHAINWORK_CACHE = {
     "0000000000000000000000000000000000000000000000000000000000000000": 0,  # virtual block at height -1
 }  # type: Dict[str, int]
@@ -213,6 +219,9 @@ class Blockchain(util.PrintError):
         return func_wrapper
 
     # Calvin: Checkpoints are defined in a json file called checkpoints.json? Todo: Where does it get an updated version?
+    # Aviv: The devs update the checkpoints file every so often and the new realse of electrum to the app store has more up-to-date checkpoints.
+    #       Users who update their wallets will likely not care, as they have all of the latest headers anyway.
+    #       This only benefits new users who create a new wallet.
     @property
     def checkpoints(self):
         return constants.net.CHECKPOINTS
@@ -269,6 +278,7 @@ class Blockchain(util.PrintError):
         return self.get_hash(self.get_max_forkpoint()).lstrip('0')[0:10]
 
     # Calvin: Verifies that the header hash matches the hash of the block
+    # Aviv: Slight correction - it is just checking that the hash of header-n is the hash stored.
     def check_header(self, header: dict) -> bool:
         header_hash = hash_header(header)
         height = header.get('block_height')
