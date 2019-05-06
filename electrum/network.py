@@ -136,7 +136,6 @@ proxy_modes = ['socks4', 'socks5']
 
 def serialize_proxy(p):
     if not isinstance(p, dict):
-        return None
     return ':'.join([p.get('mode'), p.get('host'), p.get('port'),
                      p.get('user', ''), p.get('password', '')])
 
@@ -775,7 +774,7 @@ class Network(PrintError):
         onion_servers = buckets[BUCKET_NAME_OF_ONION_SERVERS]
         if iface_to_check.is_tor():
             # keep number of onion servers below half of all connected servers
-            if len(onion_servers) > NUM_TARGET_CONNECTED_SERVERS // 2:
+            if len(onion_servers) > NUM_TARGET_CONNECTED_SERVERS // 2:  
                 return False
         else:
             bucket = iface_to_check.bucket_based_on_ipaddress()

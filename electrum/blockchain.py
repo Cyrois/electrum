@@ -105,10 +105,10 @@ def read_blockchains(config: 'SimpleConfig'):
                             prev_hash=None)
     blockchains[constants.net.GENESIS] = best_chain
     # consistency checks
-    #TODO-Calvin: This seems to be the point where it checks the 2016th block timestamp.
     # Calvin: Seems like this is validation that we would need
     # Aviv: It looks like the checkpoint is 1 before the new epoch (2016*) and checks if the next block is valid,
     #       If it is not valid, then it deletes that checkpoint. 
+    # Todo-Calvin: Isn't the height 0 at this point? Need to find if there is some kind of header file that exists during this initialization...
     if best_chain.height() > constants.net.max_checkpoint():
         header_after_cp = best_chain.read_header(constants.net.max_checkpoint()+1)
         if not header_after_cp or not best_chain.can_connect(header_after_cp, check_height=False):
@@ -145,6 +145,7 @@ def read_blockchains(config: 'SimpleConfig'):
             delete_chain(filename, "deleting fork below max checkpoint")
             return
         # find parent (sorting by forkpoint guarantees it's already instantiated TODO-Calvin: why?)
+        # Todo-Calvin: Where does the sorting occur?
         for parent in blockchains.values():
             if parent.check_hash(forkpoint - 1, prev_hash):  # Calvin: Seems like the forkpoint is always the beginning of a new block
                 break
@@ -157,6 +158,8 @@ def read_blockchains(config: 'SimpleConfig'):
                        forkpoint_hash=first_hash,
                        prev_hash=prev_hash)
         # consistency checks
+        # Todo-Calvin: Why is this necessary if the Blockchain constructor does what its told (should only fail if a bug?)
+        # Calvin: Answer is that it checks that the file was created properly
         h = b.read_header(b.forkpoint) # Calvin: gets the dictionary value of the header at the forkpoint
         if first_hash != hash_header(h):  # Calvin: Checks that the forkpoint header is the beginning of the block
             delete_chain(filename, "incorrect first hash for chain")
@@ -383,34 +386,35 @@ class Blockchain(util.PrintError):
             filename = os.path.join('forks', basename)
         return os.path.join(d, filename)
 
-    # Calvin:
+    # Calvin: Saves a chunk of headers
     @with_lock
     def save_chunk(self, index: int, chunk: bytes):
         assert index >= 0, index
         # Todo-Calvin: When would the chunk have to be within the checkpoints length?
         chunk_within_checkpoint_region = index < len(self.checkpoints)
         # chunks in checkpoint region are the responsibility of the 'main chain'
+        # Todo-Calvin: The main chain
         if chunk_within_checkpoint_region and self.parent is not None:
             main_chain = get_best_chain()
             main_chain.save_chunk(index, chunk)
             return
 
-        # Todo-Calvin: Wtf?
+        # Calvin: Why is it doing 2016 at a time? This must be saving all the data up to a checkpoint
         delta_height = (index * 2016 - self.forkpoint)
         delta_bytes = delta_height * HEADER_SIZE
         # if this chunk contains our forkpoint, only save the part after forkpoint
         # (the part before is the responsibility of the parent)
         if delta_bytes < 0:
-            chunk = chunk[-delta_bytes:]
+            chunk = chunk[-delta_bytes:] # index starts from end, backwards
             delta_bytes = 0
         truncate = not chunk_within_checkpoint_region
         self.write(chunk, delta_bytes, truncate)
         self.swap_with_parent()
 
-    # Todo-Calvin: When does it need to do this?
+    # Calvin: Called everytime we save a single or chunk of headers to this blockchain
     def swap_with_parent(self) -> None:
-        with self.lock, blockchains_lock:
-            # do the swap; possibly multiple ones
+        with self.lock, blockchains_lock: # Calvin: Does the internal stuff only after acquiring a lock
+            # do the swap; possibly multiple ones # Todo-Calvin: Why multiple swaps?
             cnt = 0
             while True:
                 old_parent = self.parent
@@ -418,14 +422,15 @@ class Blockchain(util.PrintError):
                     break
                 # make sure we are making progress
                 cnt += 1
-                if cnt > len(blockchains):
+                if cnt > len(blockchains): # Calvin: Stops an infinite loop of swapping
                     raise Exception(f'swapping fork with parent too many times: {cnt}')
                 # we might have become the parent of some of our former siblings
+                # Calvin: Since we have replaced the parent, we need to update the reference to the Blockchain object for all of our siblings
                 for old_sibling in old_parent.get_direct_children():
-                    if self.check_hash(old_sibling.forkpoint - 1, old_sibling._prev_hash):
+                    if self.check_hash(old_sibling.forkpoint - 1, old_sibling._prev_hash): # Calvin: Update the sibling if they point to the same hash
                         old_sibling.parent = self
 
-    # Todo-Calvin: This is special forking logic that we will need to understand
+    # Calvin: IMPORTANT! These keeps the main_chain/best_chain up to date
     def _swap_with_parent(self) -> bool:
         """Check if this chain became stronger than its parent, and swap
         the underlying files if so. The Blockchain instances will keep
@@ -443,7 +448,7 @@ class Blockchain(util.PrintError):
         parent_old_id = parent.get_id()
         # swap files
         # child takes parent's name
-        # parent's new name will be something new (not child's old name)
+        # parent's new name will be something new (not child's old name) Calvin: This makes sense, otherwise the hash would be invalid
         self.assert_headers_file_available(self.path())
         child_old_name = self.path()
         with open(self.path(), 'rb') as f:
@@ -452,14 +457,16 @@ class Blockchain(util.PrintError):
         assert forkpoint > parent.forkpoint, (f"forkpoint of parent chain ({parent.forkpoint}) "
                                               f"should be at lower height than children's ({forkpoint})")
         with open(parent.path(), 'rb') as f:
-            f.seek((forkpoint - parent.forkpoint)*HEADER_SIZE)
+            # Calvin: forkpoint - parent.forkpoint is technically the height of this blockchain, why not use height method?
+            # Calvin: Answer: There is a main_chain, this uses the blockchain with the greatest chainwork as the main_chain
+            f.seek((forkpoint - parent.forkpoint)*HEADER_SIZE) # Calvin: This excludes the forkpoint_hash, why? Technically the forkpoints have the same first header! Saves a few bytes of writing.
             parent_data = f.read(parent_branch_size*HEADER_SIZE)
-        self.write(parent_data, 0)
-        parent.write(my_data, (forkpoint - parent.forkpoint)*HEADER_SIZE)
-        # swap parameters
+        self.write(parent_data, 0) # Calvin: writes the parents block data into this (current child)
+        parent.write(my_data, (forkpoint - parent.forkpoint)*HEADER_SIZE) # Calvin: writes the child's block data into parents file
+        # swap parameters # Calvin: Swaps the childs parents to be the parent's parent and the parent's parent is now the previous child
         self.parent, parent.parent = parent.parent, self  # type: Optional[Blockchain], Optional[Blockchain]
         self.forkpoint, parent.forkpoint = parent.forkpoint, self.forkpoint
-        self._forkpoint_hash, parent._forkpoint_hash = parent._forkpoint_hash, hash_raw_header(bh2u(parent_data[:HEADER_SIZE]))
+        self._forkpoint_hash, parent._forkpoint_hash = parent._forkpoint_hash, hash_raw_header(bh2u(parent_data[:HEADER_SIZE])) # Swaps the forkpoint_hash values
         self._prev_hash, parent._prev_hash = parent._prev_hash, self._prev_hash
         # parent's new name
         os.replace(child_old_name, parent.path())
@@ -516,7 +523,7 @@ class Blockchain(util.PrintError):
     def read_header(self, height: int) -> Optional[dict]:
         if height < 0:
             return
-        if height < self.forkpoint: #TODO-Calvin: what is the forkpoint? Is it when the blockchain has forked? Why would it read the parent?
+        if height < self.forkpoint: #Calvin: Recursively looks for the header
             return self.parent.read_header(height)
         if height > self.height():
             return
@@ -584,7 +591,6 @@ class Blockchain(util.PrintError):
         # Todo-Calvin: What is the significance of 4?
         nActualTimespan = max(nActualTimespan, nTargetTimespan // 4)
         nActualTimespan = min(nActualTimespan, nTargetTimespan * 4)
-        # Todo-Calvin: So the target time will decrease over time?
         new_target = min(MAX_TARGET, (target * nActualTimespan) // nTargetTimespan)
         # not any target can be represented in 32 bits:
         new_target = self.bits_to_target(self.target_to_bits(new_target))
@@ -623,7 +629,7 @@ class Blockchain(util.PrintError):
         return work
 
     # Todo-Calvin: Why does it need to store the chainwork in a cache? Don't we just need the highest? Must have something to do with the forks
-    # Todo-Calvin: Most likely standard blockchain logic for handling forks
+    # Calvin: IMPORTANT logic for maintaining the main_chain
     @with_lock
     def get_chainwork(self, height=None) -> int:
         if height is None:
@@ -654,11 +660,12 @@ class Blockchain(util.PrintError):
         return running_total + work_in_last_partial_chunk
 
     # Calvin: Validation logic when connecting a new block to the chain
+    # Calvin: Checks that the header provided is continuation of the current chain (has valid prev_hash) and has the expected target
     def can_connect(self, header: dict, check_height: bool=True) -> bool:
         if header is None:
             return False
         height = header['block_height']
-        if check_height and self.height() != height - 1: # Todo-Calvin: If the current blocks' height is not next in the chain?
+        if check_height and self.height() != height - 1:
             #self.print_error("cannot connect at height", height)
             return False
         if height == 0:
@@ -670,7 +677,7 @@ class Blockchain(util.PrintError):
         if prev_hash != header.get('prev_block_hash'):
             return False
         try:
-            target = self.get_target(height // 2016 - 1)
+            target = self.get_target(height // 2016 - 1) # Todo-Calvin: why not use the previous hash target? Because this is used by fork too, might not point to previous hash...
         except MissingHeader:
             return False
         try:
@@ -703,6 +710,7 @@ class Blockchain(util.PrintError):
 
 
 #Calvin: Verifies that the list of blockchain headers are all valid
+#Calvin: Returns a reference to the Blockchain object that contains this header
 def check_header(header: dict) -> Optional[Blockchain]:
     if type(header) is not dict:
         return None
